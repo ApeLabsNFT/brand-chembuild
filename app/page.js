@@ -70,6 +70,7 @@ export default function Home() {
   const pastRef = useRef(false);
   const reducedRef = useRef(false);
   const scrollFallbackRef = useRef(null);
+  const drawRef = useRef(null); // lets loadFrame repaint without a dependency cycle
 
   const [loading, setLoading] = useState(true);
   const [pct, setPct] = useState(0);
@@ -93,6 +94,12 @@ export default function Home() {
       const bmp = await createImageBitmap(await res.blob());
       cache.set(i, bmp);
       evict();
+      /* If this is the frame we're sitting on, paint it now. The rAF loop
+         would catch it too, but not on the reduced-motion path, where
+         there is no loop and the scroll has already finished. */
+      if (i === curRef.current - 1 && drawRef.current) {
+        if (drawRef.current(curRef.current)) lastDrawnRef.current = curRef.current;
+      }
     } catch {
       /* a dropped frame is survivable — draw() falls back to the nearest one */
     } finally {
@@ -132,11 +139,15 @@ export default function Home() {
 
   /* ---------------- drawing ---------------- */
 
+  /* Returns whether it actually painted. The caller must not record the
+     frame as drawn unless it did — otherwise a frame whose bitmap is still
+     decoding is marked done, and when the bitmap lands nothing repaints it.
+     That left the canvas frozen on frame 1 while the overlays advanced. */
   const draw = useCallback((f) => {
     const ctx = ctxRef.current;
-    if (!ctx) return;
+    if (!ctx) return false;
     const img = nearest(Math.max(0, Math.min(f - 1, TOTAL - 1)));
-    if (!img) return;
+    if (!img) return false;
 
     const { w, h } = metricsRef.current; // device pixels; ctx is NOT scaled
     const ir = img.width / img.height;
@@ -156,7 +167,10 @@ export default function Home() {
       dy = (h - dh) / 2;
     }
     ctx.drawImage(img, dx, dy, dw, dh);
+    return true;
   }, [nearest]);
+
+  drawRef.current = draw;
 
   /* ---------------- scroll -> frame ---------------- */
 
@@ -177,10 +191,10 @@ export default function Home() {
     for (let k = 1; k <= AHEAD; k++) loadFrame(i + k * dirRef.current);
     for (let k = 1; k <= BEHIND; k++) loadFrame(i - k * dirRef.current);
 
-    if (f !== lastDrawnRef.current) {
-      lastDrawnRef.current = f;
-      draw(f);
-    }
+    /* Retry until it paints: a jump to a cold part of the sequence has
+       nothing decoded yet, and this keeps trying each tick until the
+       bitmap arrives. A miss is just a Map lookup, so retrying is cheap. */
+    if (f !== lastDrawnRef.current && draw(f)) lastDrawnRef.current = f;
 
     /* HUD written straight to the DOM. Doing this through setState
        re-rendered the whole page ~200 times per scroll-through. */
