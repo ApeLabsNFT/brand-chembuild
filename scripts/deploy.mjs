@@ -18,16 +18,21 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const OUT = path.join(ROOT, "out");
 const BRANCH = "gh-pages";
 
+/* Only npm needs a shell on Windows (it resolves to npm.cmd). Running git
+   through a shell makes Windows re-parse the argv, which splits arguments
+   containing spaces — a commit message, for instance. */
+const needsShell = (cmd) => process.platform === "win32" && cmd === "npm";
+
 const run = (cmd, args, cwd = ROOT, env = {}) =>
   execFileSync(cmd, args, {
     cwd,
     stdio: "inherit",
-    shell: process.platform === "win32",
+    shell: needsShell(cmd),
     env: { ...process.env, ...env },
   });
 
 const capture = (cmd, args, cwd = ROOT) =>
-  execFileSync(cmd, args, { cwd, encoding: "utf8", shell: process.platform === "win32" }).trim();
+  execFileSync(cmd, args, { cwd, encoding: "utf8", shell: needsShell(cmd) }).trim();
 
 const remote = capture("git", ["remote", "get-url", "origin"]);
 const repo = remote.replace(/\.git$/, "").split("/").pop();
